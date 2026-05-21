@@ -1,4 +1,4 @@
-# Orbit viewer
+# Orbit viewer v1.0.0
 
 PySide6 desktop app for visualizing elliptical orbits in 3D (ECI) and ground-track (lat/lon) views, powered by VisPy and the `Orbit` simulation in `orbit.py`.
 
