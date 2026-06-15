@@ -14,7 +14,7 @@ from orbit import DEFAULT_ANIMATION_SECONDS, R_EARTH, Orbit
 from utils import break_at_dateline, xyz_to_latlon
 
 DEFAULT_H_MAX = 100_000e3
-DEFAULT_H_MIN = 100e3
+DEFAULT_H_MIN = 500e3
 DEFAULT_STEP_S = 60.0
 DEFAULT_N_ORBITS = 4
 DEFAULT_ANIMATION_SPEED = 1.0
@@ -249,6 +249,11 @@ def _update_mesh_position(visual, position, scale):
     visual.update()
 
 
+def _orbital_speed_km_s(vel):
+    """Scalar speed in km/s from an ECI velocity vector (m/s)."""
+    return float(np.linalg.norm(np.asarray(vel, dtype=np.float64))) / 1000.0
+
+
 def _update_velocity_arrow(arrow, pos, vel, *, duration_s=VELOCITY_ARROW_DURATION_S):
     """Draw a fixed-time velocity arrow anchored at the satellite."""
     pos = np.asarray(pos, dtype=np.float64).reshape(3)
@@ -459,7 +464,7 @@ class OrbitApp(QtWidgets.QMainWindow):
             distance=R_EARTH * 4,
             center=(0.0, 0.0, 0.0),
         )
-        self._view_3d.camera.events.connect(self._sync_axis_camera)
+        self._hook_axis_camera_sync()
 
         self._axis_view = grid.add_view(row=2, col=0)
         self._axis_view.width_max = 110
@@ -472,6 +477,7 @@ class OrbitApp(QtWidgets.QMainWindow):
         )
         self._axis_view.camera.interactive = False
         scene.visuals.XYZAxis(parent=self._axis_view.scene)
+        self._sync_axis_camera()
 
         self._ref_parent = self._view_3d.scene
         self._earth_visual = None
@@ -481,13 +487,49 @@ class OrbitApp(QtWidgets.QMainWindow):
         self._satellite_3d = None
         self._velocity_arrow_3d = None
 
-        layout.addWidget(self._canvas_3d.native)
+        canvas_host = QtWidgets.QWidget()
+        canvas_grid = QtWidgets.QGridLayout(canvas_host)
+        canvas_grid.setContentsMargins(0, 0, 0, 0)
+        canvas_grid.addWidget(self._canvas_3d.native, 0, 0)
+        self._orbital_speed_label = QtWidgets.QLabel("v = — km/s", canvas_host)
+        self._orbital_speed_label.setStyleSheet(
+            "color: #e8e8e8; background-color: rgba(30, 30, 30, 0.82);"
+            "padding: 6px 10px; border-radius: 4px; font-size: 13px;"
+        )
+        canvas_grid.addWidget(
+            self._orbital_speed_label,
+            0,
+            0,
+            QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignRight,
+        )
+        layout.addWidget(canvas_host)
+
+    def _hook_axis_camera_sync(self):
+        """Keep the corner axis gizmo aligned with the main 3D camera."""
+        main_cam = self._view_3d.camera
+        orig_view_changed = main_cam.view_changed
+
+        def view_changed_with_axis_sync(*args, **kwargs):
+            orig_view_changed(*args, **kwargs)
+            self._sync_axis_camera()
+
+        main_cam.view_changed = view_changed_with_axis_sync
 
     def _sync_axis_camera(self, _event=None):
         if self._axis_view is None or self._view_3d is None:
             return
-        self._axis_view.camera.azimuth = self._view_3d.camera.azimuth
-        self._axis_view.camera.elevation = self._view_3d.camera.elevation
+        src = self._view_3d.camera
+        dst = self._axis_view.camera
+        dst.azimuth = src.azimuth
+        dst.elevation = src.elevation
+        dst.roll = src.roll
+
+    def _update_orbital_speed_label(self, vel):
+        if not hasattr(self, "_orbital_speed_label"):
+            return
+        self._orbital_speed_label.setText(
+            f"v = {_orbital_speed_km_s(vel):.3f} km/s"
+        )
 
     def _setup_2d_panel(self):
         self._panel_2d = QtWidgets.QWidget()
@@ -681,6 +723,7 @@ class OrbitApp(QtWidgets.QMainWindow):
         _configure_scene_visual(
             self._velocity_arrow_3d, order=_GL_ORDER_VELOCITY, alpha=1.0
         )
+        self._update_orbital_speed_label(vel0)
 
         self._orbit_camera_distance = max(extent * 2.5, R_EARTH * 3)
         if not self._chk_chase.isChecked():
@@ -797,6 +840,7 @@ class OrbitApp(QtWidgets.QMainWindow):
             )
         self._last_sat_pos = pos
         self._last_sat_vel = vel
+        self._update_orbital_speed_label(vel)
         _update_mesh_position(self._satellite_3d, pos, self._sat_scale_3d)
         if self._velocity_arrow_3d is not None:
             _update_velocity_arrow(self._velocity_arrow_3d, pos, vel)
